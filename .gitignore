@@ -136,6 +136,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.production
+.env.staging
 .envrc
 .venv
 env/
@@ -143,6 +146,51 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# FastAPI specific
+.pytest_cache/
+*.db
+*.sqlite
+*.sqlite3
+app.db
+test.db
+
+# API keys and secrets
+secrets/
+.secrets
+config.ini
+.config
+
+# Logs
+logs/
+*.log
+access.log
+error.log
+uvicorn.log
+
+# Database
+database/
+db_data/
+migrations/versions/
+alembic.ini
+
+# Cache directories
+.cache/
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+.ruff_cache/
+
+# FastAPI uploads
+uploads/
+media/
+static/uploads/
+
+# Testing
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
 
 # Spyder project settings
 .spyderproject
