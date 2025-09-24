@@ -3,26 +3,23 @@
 import os
 import sys
 import dotenv
-from tqdm import tqdm
+from tqdm import tqdm #for show prograss bar
 import chromadb
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 
 def main():
-    """
-    Connects to cloud ChromaDB and uploads PDFs using FREE ChromaDB embeddings.
-    No Google API required!
-    """
+    
+    # Connects to cloud ChromaDB and uploads PDFs (embeddings).
+    # Load and Validate ChromaDB Credentials
     dotenv.load_dotenv()
-    print("🆓 Starting FREE data ingestion (no Google API needed)...")
-
-    # --- Load and Validate ChromaDB Credentials ---
+    
     chroma_tenant = os.getenv("CHROMA_TENANT")
     chroma_database = os.getenv("CHROMA_DATABASE")
     chroma_api_key = os.getenv("CHROMA_API_KEY")
 
     if not all([chroma_tenant, chroma_database, chroma_api_key]):
-        print("❌ Error: Missing ChromaDB credentials in .env file.")
+        print("Error: Missing ChromaDB credentials in .env file.")
         print("Please ensure your .env contains: CHROMA_TENANT, CHROMA_DATABASE, CHROMA_API_KEY")
         sys.exit(1)
 
@@ -32,18 +29,18 @@ def main():
 
     # --- 1. LOAD DOCUMENTS ---
     documents = []
-    print(f"📁 Loading documents from {DATA_PATH}...")
+    print(f"Loading documents from {DATA_PATH}...")
     
     if not os.path.exists(DATA_PATH):
-        print(f"❌ Directory '{DATA_PATH}' not found!")
+        print(f"Directory '{DATA_PATH}' not found!")
         return
     
     pdf_files = [f for f in os.listdir(DATA_PATH) if f.endswith('.pdf')]
     if not pdf_files:
-        print(f"❌ No PDF files found in '{DATA_PATH}'")
+        print(f"No PDF files found in '{DATA_PATH}'")
         return
     
-    print(f"📄 Found {len(pdf_files)} PDF files: {pdf_files}")
+    print(f"Found {len(pdf_files)} PDF files: {pdf_files}")
     
     for filename in pdf_files:
         file_path = os.path.join(DATA_PATH, filename)
@@ -51,28 +48,33 @@ def main():
             loader = PyPDFLoader(file_path)
             docs = loader.load()
             documents.extend(docs)
-            print(f"✅ Loaded {filename} ({len(docs)} pages)")
+            print(f"✅Loaded {filename} ({len(docs)} pages)")
         except Exception as e:
-            print(f"❌ Error loading {filename}: {e}")
+            print(f"❌Error loading {filename}: {e}")
 
     if not documents:
         print("❌ No documents were loaded successfully.")
         return
 
-    print(f"📚 Total loaded: {len(documents)} document pages.")
+    print(f"Total loaded: {len(documents)} document pages.")
+
+
 
     # --- 2. SPLIT DOCUMENTS INTO CHUNKS ---
-    print("✂️ Splitting documents into chunks...")
+    print("-------------Splitting documents into chunks------------")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, 
         chunk_overlap=200,
         separators=["\n\n", "\n", " ", ""]
     )
     chunks = text_splitter.split_documents(documents)
-    print(f"📝 Created {len(chunks)} chunks.")
+    print(f"Created {len(chunks)} chunks.")
+
+
+
 
     # --- 3. CONNECT TO CHROMADB (NO GOOGLE API NEEDED!    python3 src/scripts/ingest_data.py) ---
-    print("🌐 Connecting to ChromaDB Cloud...")
+    print("Connecting to ChromaDB Cloud......")
     try:
         client = chromadb.CloudClient(
             tenant=chroma_tenant,
@@ -80,10 +82,9 @@ def main():
             api_key=chroma_api_key
         )
         
-        # Create collection with default embeddings (FREE!)
+        # Create collection with default embeddings
         collection = client.get_or_create_collection(
             name=COLLECTION_NAME,
-            # ChromaDB will use its default embedding function (free!)
         )
         print("✅ Successfully connected to ChromaDB!")
         
@@ -91,15 +92,15 @@ def main():
         print(f"❌ ChromaDB connection failed: {e}")
         return
 
+
+
     # --- 4. STORE CHUNKS (NO EMBEDDING API CALLS!) ---
-    print(f"💾 Storing {len(chunks)} chunks using FREE embeddings...")
-    
     # Clear existing data first
+    #reduse duplicates values 
     try:
         existing_count = collection.count()
-        if existing_count > 0:
-            print(f"🧹 Clearing {existing_count} existing chunks...")
-            # Get all IDs and delete them
+        if existing_count > 0:#if have old exists in the data , delete all old data
+            print(f"Clearing {existing_count} existing chunks......")
             existing_data = collection.get()
             if existing_data['ids']:
                 collection.delete(ids=existing_data['ids'])
@@ -107,11 +108,15 @@ def main():
     except Exception as e:
         print(f"⚠️ Warning: Could not clear existing data: {e}")
 
+
+
+
+
     # Add new chunks in batches
     batch_size = 50  # Smaller batches for cloud
     success_count = 0
     
-    for i in tqdm(range(0, len(chunks), batch_size), desc="📤 Uploading"):
+    for i in tqdm(range(0, len(chunks), batch_size), desc="Uploading..."):
         batch = chunks[i:i+batch_size]
         
         # Create unique IDs
@@ -159,14 +164,18 @@ def main():
             else:
                 print(f"❌ Batch {i//batch_size + 1} failed permanently.")
 
-    # --- 5. VERIFY RESULTS ---
+
+
+
+
+    # ------------VERIFY RESULTS ---------------------
     final_count = collection.count()
-    print(f"\n🎉 Process Finished!")
-    print(f"📊 Total chunks in collection: {final_count}")
+    print(f"\nProcess Finished.......!")
+    print(f"Total chunks in collection: {final_count}")
     print(f"✅ Successfully uploaded: {success_count}/{len(chunks)} chunks")
     
     if final_count > 0:
-        print("🎯 Success! Your data is now ready for the AI Legal Adviser app.")
+        print("Success! Your data is now ready for the AI Legal Adviser app.")
         
         # Test a quick query
         try:
@@ -175,7 +184,7 @@ def main():
                 n_results=1
             )
             if test_results['documents'][0]:
-                print("🔍 Quick test query successful - embeddings are working!")
+                print("Quick test query successful - embeddings are working....!")
             else:
                 print("⚠️ Test query returned no results.")
         except Exception as e:
