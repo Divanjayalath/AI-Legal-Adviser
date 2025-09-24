@@ -1,84 +1,187 @@
 # src/scripts/ingest_data.py
 
 import os
+import sys
 import dotenv
 from tqdm import tqdm
 import chromadb
-from langchain.text_splitter import RecursiveCharacterTextSplitter # <-- CORRECTED LINE
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-# Load environment variables
-dotenv.load_dotenv()
-
-# Define paths and constants
-DATA_PATH = 'data/raw'
-DB_PATH = 'chroma_db'
-COLLECTION_NAME = 'sri_lanka_legal'
 
 def main():
     """
-    Main function to process PDFs, create embeddings, and store them in ChromaDB.
+    Connects to cloud ChromaDB and uploads PDFs using FREE ChromaDB embeddings.
+    No Google API required!
     """
-    print("Starting data ingestion and embedding process...")
+    dotenv.load_dotenv()
+    print("🆓 Starting FREE data ingestion (no Google API needed)...")
+
+    # --- Load and Validate ChromaDB Credentials ---
+    chroma_tenant = os.getenv("CHROMA_TENANT")
+    chroma_database = os.getenv("CHROMA_DATABASE")
+    chroma_api_key = os.getenv("CHROMA_API_KEY")
+
+    if not all([chroma_tenant, chroma_database, chroma_api_key]):
+        print("❌ Error: Missing ChromaDB credentials in .env file.")
+        print("Please ensure your .env contains: CHROMA_TENANT, CHROMA_DATABASE, CHROMA_API_KEY")
+        sys.exit(1)
+
+    # --- Configuration ---
+    DATA_PATH = 'data/raw'
+    COLLECTION_NAME = 'sri_lanka_legal'
 
     # --- 1. LOAD DOCUMENTS ---
     documents = []
-    for filename in os.listdir(DATA_PATH):
-        if filename.endswith('.pdf'):
-            file_path = os.path.join(DATA_PATH, filename)
-            try:
-                loader = PyPDFLoader(file_path)
-                documents.extend(loader.load())
-                print(f"Loaded {filename}")
-            except Exception as e:
-                print(f"Error loading {filename}: {e}")
+    print(f"📁 Loading documents from {DATA_PATH}...")
     
+    if not os.path.exists(DATA_PATH):
+        print(f"❌ Directory '{DATA_PATH}' not found!")
+        return
+    
+    pdf_files = [f for f in os.listdir(DATA_PATH) if f.endswith('.pdf')]
+    if not pdf_files:
+        print(f"❌ No PDF files found in '{DATA_PATH}'")
+        return
+    
+    print(f"📄 Found {len(pdf_files)} PDF files: {pdf_files}")
+    
+    for filename in pdf_files:
+        file_path = os.path.join(DATA_PATH, filename)
+        try:
+            loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            documents.extend(docs)
+            print(f"✅ Loaded {filename} ({len(docs)} pages)")
+        except Exception as e:
+            print(f"❌ Error loading {filename}: {e}")
+
     if not documents:
-        print("No documents loaded. Exiting.")
+        print("❌ No documents were loaded successfully.")
         return
 
+    print(f"📚 Total loaded: {len(documents)} document pages.")
+
     # --- 2. SPLIT DOCUMENTS INTO CHUNKS ---
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200) # <-- CORRECTED USAGE
+    print("✂️ Splitting documents into chunks...")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000, 
+        chunk_overlap=200,
+        separators=["\n\n", "\n", " ", ""]
+    )
     chunks = text_splitter.split_documents(documents)
-    print(f"Split {len(documents)} documents into {len(chunks)} chunks.")
+    print(f"📝 Created {len(chunks)} chunks.")
 
-    # --- 3. SETUP EMBEDDING MODEL AND DATABASE ---
-    # Initialize the embedding model
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    
-    # Initialize ChromaDB client and create/get collection
-    client = chromadb.PersistentClient(path=DB_PATH)
-    collection = client.get_or_create_collection(name=COLLECTION_NAME)
+    # --- 3. CONNECT TO CHROMADB (NO GOOGLE API NEEDED!    python3 src/scripts/ingest_data.py) ---
+    print("🌐 Connecting to ChromaDB Cloud...")
+    try:
+        client = chromadb.CloudClient(
+            tenant=chroma_tenant,
+            database=chroma_database,
+            api_key=chroma_api_key
+        )
+        
+        # Create collection with default embeddings (FREE!)
+        collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            # ChromaDB will use its default embedding function (free!)
+        )
+        print("✅ Successfully connected to ChromaDB!")
+        
+    except Exception as e:
+        print(f"❌ ChromaDB connection failed: {e}")
+        return
 
-    # --- 4. EMBED AND STORE CHUNKS ---
-    print(f"Embedding and storing {len(chunks)} chunks in ChromaDB. This may take a while...")
+    # --- 4. STORE CHUNKS (NO EMBEDDING API CALLS!) ---
+    print(f"💾 Storing {len(chunks)} chunks using FREE embeddings...")
     
-    # Process chunks in batches to be efficient
-    batch_size = 100
-    for i in tqdm(range(0, len(chunks), batch_size), desc="Embedding Chunks"):
+    # Clear existing data first
+    try:
+        existing_count = collection.count()
+        if existing_count > 0:
+            print(f"🧹 Clearing {existing_count} existing chunks...")
+            # Get all IDs and delete them
+            existing_data = collection.get()
+            if existing_data['ids']:
+                collection.delete(ids=existing_data['ids'])
+            print("✅ Cleared existing data.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not clear existing data: {e}")
+
+    # Add new chunks in batches
+    batch_size = 50  # Smaller batches for cloud
+    success_count = 0
+    
+    for i in tqdm(range(0, len(chunks), batch_size), desc="📤 Uploading"):
         batch = chunks[i:i+batch_size]
         
-        # Create IDs for each chunk
-        ids = [f"chunk_{i+j}" for j, _ in enumerate(batch)]
+        # Create unique IDs
+        ids = [f"chunk_{i+j:04d}" for j, _ in enumerate(batch)]
         
-        # Get document content for embedding
+        # Get document content
         documents_content = [doc.page_content for doc in batch]
-
-        # Embed the batch and add to the collection
+        
+        # Get metadata
+        metadatas = []
+        for doc in batch:
+            metadata = doc.metadata.copy() if doc.metadata else {}
+            # Add chunk info
+            metadata.update({
+                'chunk_index': i + len(metadatas),
+                'chunk_size': len(doc.page_content)
+            })
+            metadatas.append(metadata)
+        
         try:
-            embedded_vectors = embeddings.embed_documents(documents_content)
+            # ChromaDB will automatically create embeddings for free!
             collection.add(
                 ids=ids,
-                embeddings=embedded_vectors,
                 documents=documents_content,
-                metadatas=[doc.metadata for doc in batch]
+                metadatas=metadatas
             )
+            success_count += len(batch)
+            
         except Exception as e:
-            print(f"Error embedding batch {i//batch_size}: {e}")
+            print(f"\n❌ Error uploading batch {i//batch_size + 1}: {e}")
+            if "rate limit" in str(e).lower():
+                print("⏳ Rate limited. Waiting 5 seconds...")
+                import time
+                time.sleep(5)
+                # Retry once
+                try:
+                    collection.add(
+                        ids=ids,
+                        documents=documents_content,
+                        metadatas=metadatas
+                    )
+                    success_count += len(batch)
+                except Exception as e2:
+                    print(f"❌ Retry failed: {e2}")
+            else:
+                print(f"❌ Batch {i//batch_size + 1} failed permanently.")
 
-    print("--- Process Finished ---")
-    print(f"Total chunks in collection: {collection.count()}")
+    # --- 5. VERIFY RESULTS ---
+    final_count = collection.count()
+    print(f"\n🎉 Process Finished!")
+    print(f"📊 Total chunks in collection: {final_count}")
+    print(f"✅ Successfully uploaded: {success_count}/{len(chunks)} chunks")
+    
+    if final_count > 0:
+        print("🎯 Success! Your data is now ready for the AI Legal Adviser app.")
+        
+        # Test a quick query
+        try:
+            test_results = collection.query(
+                query_texts=["legal advice"],
+                n_results=1
+            )
+            if test_results['documents'][0]:
+                print("🔍 Quick test query successful - embeddings are working!")
+            else:
+                print("⚠️ Test query returned no results.")
+        except Exception as e:
+            print(f"⚠️ Test query failed: {e}")
+    else:
+        print("❌ No data was uploaded. Check the errors above.")
 
 if __name__ == '__main__':
     main()
