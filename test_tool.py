@@ -19,7 +19,8 @@ def run_test():
     print(f"Searching for lawyers with specialty: '{test_specialty}' in location: '{test_location}'")
     
     # Call the tool directly
-    results = find_lawyer(specialty=test_specialty, location=test_location)
+    tool_input = {"specialty": test_specialty, "location": test_location}
+    results = find_lawyer.invoke(tool_input)
     
     print("\n--- RESULTS ---")
     print(results)
