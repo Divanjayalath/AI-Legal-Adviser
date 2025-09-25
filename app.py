@@ -1,200 +1,138 @@
+# app.py
+
 import streamlit as st
 import os
+import sys
 import dotenv
 import chromadb
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_chroma import Chroma
+from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-from langchain.chains.retrieval_qa.base import RetrievalQA
+from langchain_core.language_models.llms import LLM
+from huggingface_hub import InferenceClient
+from typing import Any, List, Mapping, Optional
 
-# Load environment variables from .env file
-dotenv.load_dotenv()
-
-# --- CONFIGURATION ---
-COLLECTION_NAME = 'sri_lanka_legal'
-DB_PATH = 'chroma_db'  # Local database path
-
-# --- RAG CHAIN SETUP ---
-
-# app.py - NEW get_rag_chain function
-
-@st.cache_resource
-def get_rag_chain():
-    # Connect to ChromaDB Cloud
-    client = chromadb.CloudClient(
-        tenant=os.getenv("CHROMA_TENANT"),
-        database=os.getenv("CHROMA_DATABASE"),
-        api_key=os.getenv("CHROMA_API_KEY")
-    )
-    
-    # Get the collection directly from ChromaDB (bypassing LangChain)
-    collection = client.get_collection(name='sri_lanka_legal')
-    
-    # Create a simple vector store wrapper
-    class SimpleVectorStore:
-        def __init__(self, collection):
-            self.collection = collection
-        
-        def similarity_search(self, query, k=3):
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=k
-            )
-            # Convert to LangChain document format
-            docs = []
-            for i, (doc_id, content, metadata) in enumerate(zip(
-                results['ids'][0],
-                results['documents'][0], 
-                results['metadatas'][0] if results['metadatas'][0] else [{}] * len(results['ids'][0])
-            )):
-                from langchain.schema import Document
-                docs.append(Document(page_content=content, metadata=metadata or {}))
-            return docs
-    
-    vector_store = SimpleVectorStore(collection)
-
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-    
-    # (The prompt template and chain creation are the same as before)
-    prompt_template = """
-    You are a helpful AI Legal Assistant for Sri Lankan law. Use the provided legal documents to answer questions accurately.
-    
-    Context from legal documents:
-    {context}
-    
-    Question: {question}
-    
-    Instructions:
-    - Provide accurate legal information based on the context
-    - If the context doesn't contain relevant information, say so clearly
-    - Always mention that this is general information and recommend consulting a qualified lawyer
-    - Be helpful and professional
-    
-    Answer:
+# --- 1. DEFINE A CUSTOM, STABLE HUGGING FACE LLM CLASS ---
+class CustomHuggingFaceLLM(LLM):
     """
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever, chain_type_kwargs={"prompt": prompt}, return_source_documents=True)
+    A custom LangChain LLM class that connects to the Hugging Face Inference API.
+    This provides a stable interface, bypassing the rapidly changing official wrappers.
+    """
+    client: Optional[InferenceClient] = None
+    repo_id: str = "mistralai/Mistral-7B-Instruct-v0.2"
+    temperature: float = 0.5
     
-    return chain
-
-# --- STREAMLIT UI ---
-
-def main():
-    """Main Streamlit app"""
-    # Page configuration
-    st.set_page_config(
-        page_title="AI Legal Adviser",
-        page_icon="⚖️",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-
-    # Header
-    st.title("⚖️ AI Legal Adviser")
-    st.markdown("*Get legal guidance based on Sri Lankan law documents*")
+    def __init__(self, api_token: str, **kwargs: Any):
+        super().__init__(**kwargs)
+        self.client = InferenceClient(token=api_token)
     
-    # Sidebar
-    with st.sidebar:
-        st.header("📋 Information")
-        st.markdown("""
-        **How it works:**
-        - Ask legal questions in natural language
-        - AI searches through legal documents
-        - Get relevant answers with source references
-        
-        **Important Notice:**
-        This tool provides general legal information only. 
-        Always consult with a qualified lawyer for specific legal advice.
-        """)
-        
-        # Connection status
-        st.header("🔗 Status")
+    class Config:
+        arbitrary_types_allowed = True
+
+    @property
+    def _llm_type(self) -> str:
+        return "custom_huggingface"
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """
+        Makes a call to the Hugging Face Inference API using the chat_completion method.
+        """
         try:
-            chain = get_rag_chain()
-            st.success("✅ Connected to legal database")
-            st.info("📚 Documents loaded and ready")
+            # Format the prompt for a chat model
+            messages = [{"role": "user", "content": prompt}]
+            
+            # Use the chat_completion method which we know works
+            response = self.client.chat_completion(
+                messages,
+                model=self.repo_id,
+                max_tokens=512,
+                temperature=self.temperature,
+            )
+            return response.choices[0].message.content or ""
         except Exception as e:
-            st.error(f"❌ Connection failed: {str(e)}")
-            st.stop()
+            # Add more detailed error logging
+            st.error(f"Hugging Face API call failed: {e}")
+            return f"Error: Could not get a response from the model. Details: {e}"
 
-    # Initialize chat history
+# --- 2. MAIN APPLICATION LOGIC ---
+def main():
+    st.set_page_config(page_title="AI Legal Adviser - Sri Lanka", page_icon="⚖️")
+    st.title("⚖️ AI Legal Adviser for Sri Lanka")
+    st.write("Ask questions about Sri Lankan law.")
+
+    try:
+        dotenv.load_dotenv()
+        required_keys = ["HUGGINGFACEHUB_API_TOKEN", "CHROMA_TENANT", "CHROMA_DATABASE", "CHROMA_API_KEY"]
+        missing_keys = [key for key in required_keys if not os.getenv(key)]
+        if missing_keys:
+            st.error(f"Missing required environment variables: {', '.join(missing_keys)}")
+            st.stop()
+    except Exception as e:
+        st.error(f"Error loading environment variables: {e}")
+        st.stop()
+
+    @st.cache_resource
+    def get_rag_chain():
+        client = chromadb.CloudClient(
+            tenant=os.getenv("CHROMA_TENANT"),
+            database=os.getenv("CHROMA_DATABASE"),
+            api_key=os.getenv("CHROMA_API_KEY")
+        )
+        vector_store = Chroma(client=client, collection_name='sri_lanka_legal')
+        retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+
+        # Initialize our new, stable custom LLM
+        llm = CustomHuggingFaceLLM(api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))
+
+        prompt_template = """
+        You are a helpful legal assistant for Sri Lankan law. Use the following context to answer the question.
+        If you don't know the answer from the context, say that you don't know.
+        **Disclaimer: This is AI-generated information and not a substitute for professional legal advice.**
+        CONTEXT: {context}
+        QUESTION: {question}
+        ANSWER:
+        """
+        prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+        chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            chain_type_kwargs={"prompt": prompt},
+            return_source_documents=True
+        )
+        return chain
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
-        # Add welcome message
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": "👋 Hello! I'm your AI Legal Assistant. I can help you with questions about Sri Lankan law based on the legal documents in my database. What would you like to know?"
-        })
 
-    # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat input
-    if prompt := st.chat_input("Ask a legal question..."):
-        # Add user message to chat history
+    try:
+        rag_chain = get_rag_chain()
+    except Exception as e:
+        st.error(f"Failed to connect: {e}")
+        st.stop()
+
+    if prompt := st.chat_input("Ask about employee termination, etc."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Generate response
         with st.chat_message("assistant"):
-            with st.spinner("🔍 Searching legal documents..."):
+            with st.spinner("Searching..."):
                 try:
-                    # Get the RAG chain
-                    chain = get_rag_chain()
-                    
-                    # Query the chain using the new method
-                    response = chain.invoke({"query": prompt})
-                    
-                    # Extract answer and sources
-                    answer = response.get("result", "I apologize, but I couldn't generate a response.")
-                    source_docs = response.get("source_documents", [])
-                    
-                    # Display answer
-                    st.markdown(answer)
-                    
-                    # Display sources if available
-                    if source_docs:
-                        with st.expander("📖 Source Documents"):
-                            for i, doc in enumerate(source_docs, 1):
-                                st.markdown(f"**Source {i}:**")
-                                st.markdown(f"```\n{doc.page_content[:300]}...\n```")
-                                if hasattr(doc, 'metadata') and doc.metadata:
-                                    st.markdown(f"*Metadata: {doc.metadata}*")
-                                st.markdown("---")
-                    
-                    # Add assistant response to chat history
-                    full_response = answer
-                    if source_docs:
-                        full_response += f"\n\n*Based on {len(source_docs)} source document(s)*"
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": full_response
-                    })
-                    
+                    response = rag_chain.invoke({"query": prompt})
+                    st.markdown(response["result"])
+                    with st.expander("Show Sources"):
+                        for doc in response["source_documents"]:
+                            st.write(f"**Source:** {os.path.basename(doc.metadata.get('source', 'N/A'))}, Page: {doc.metadata.get('page', 'N/A')}")
+                            st.write(f"> {doc.page_content[:250]}...")
+                    st.session_state.messages.append({"role": "assistant", "content": response["result"]})
                 except Exception as e:
-                    error_msg = f"❌ Sorry, I encountered an error: {str(e)}"
-                    st.error(error_msg)
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": error_msg
-                    })
+                    st.error("An error occurred. See details below.")
+                    st.exception(e)
 
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666; font-size: 0.8em;'>
-            ⚖️ AI Legal Adviser | Built with Streamlit & ChromaDB | 
-            <strong>Disclaimer:</strong> This is not professional legal advice
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
