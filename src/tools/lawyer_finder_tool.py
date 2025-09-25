@@ -4,14 +4,55 @@ import requests
 from bs4 import BeautifulSoup
 from langchain.tools import tool
 import re
+from typing import Dict, Any
 
 @tool
-def find_lawyer(specialty: str, location: str) -> str:
+def find_lawyer(query: str) -> str:
     """
     Finds lawyers by performing a live search on the PathLegal Sri Lanka directory.
     Use this tool ONLY when a user explicitly asks to find or recommend a lawyer.
-    The input requires a 'specialty' (e.g., 'Employment Law', 'Family Law') and a 'location' (e.g., 'Colombo').
+    
+    Input should be a description like: "Find family law lawyers in Colombo" or "Employment lawyers in Galle"
+    The tool will extract the specialty and location from the query.
     """
+    # Parse the query to extract specialty and location
+    specialty = "General Practice"  # Default
+    location = "Colombo"  # Default
+    
+    try:
+        query = str(query).lower()
+        
+        # Extract specialty from common legal terms
+        if any(term in query for term in ['family', 'divorce', 'custody', 'marriage']):
+            specialty = "Family Law"
+        elif any(term in query for term in ['employment', 'labor', 'workplace', 'job']):
+            specialty = "Employment Law"
+        elif any(term in query for term in ['criminal', 'crime', 'defense']):
+            specialty = "Criminal Law"
+        elif any(term in query for term in ['property', 'real estate', 'land']):
+            specialty = "Property Law"
+        elif any(term in query for term in ['business', 'corporate', 'company']):
+            specialty = "Corporate Law"
+        elif any(term in query for term in ['personal injury', 'accident', 'negligence']):
+            specialty = "Personal Injury"
+        
+        # Extract location from common Sri Lankan cities
+        if any(city in query for city in ['colombo']):
+            location = "Colombo"
+        elif any(city in query for city in ['kandy']):
+            location = "Kandy"
+        elif any(city in query for city in ['galle']):
+            location = "Galle"
+        elif any(city in query for city in ['jaffna']):
+            location = "Jaffna"
+        elif any(city in query for city in ['negombo']):
+            location = "Negombo"
+        elif any(city in query for city in ['matara']):
+            location = "Matara"
+            
+    except Exception as e:
+        print(f"Query parsing error: {e}, using defaults")
+    
     print(f"--- 🌐 Executing Live Lawyer Search for: '{specialty}' in '{location}' ---")
 
     try:
