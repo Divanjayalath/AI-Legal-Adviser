@@ -3,12 +3,16 @@
 import os
 import re
 import json
+from typing import Literal, Dict
+from dotenv import load_dotenv
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.output_parsers.base import BaseOutputParser
-from langchain_huggingface.chat_models import ChatHuggingFace
-from typing import Literal, Dict
+from langchain_groq import ChatGroq
+
+# Load environment variables
+load_dotenv()
 
 # Step 1: Define the desired output structure using Pydantic.
 # This acts as a strict "form" that the AI is required to fill out.
@@ -93,18 +97,12 @@ def get_query_parser_chain():
         partial_variables={"format_instructions": parser.get_format_instructions()},
     )
 
-    # Step 4: Initialize the LLM. We use a low temperature for accuracy.
-    # First create the base LLM, then wrap it with ChatHuggingFace
-    from langchain_huggingface import HuggingFaceEndpoint
-    
-    base_llm = HuggingFaceEndpoint(
-        repo_id="mistralai/Mistral-7B-Instruct-v0.2",
+    # Step 4: Initialize the Groq LLM. We use a low temperature for accuracy.
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
         temperature=0.1, # Low temperature for precise classification
-        huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        groq_api_key=os.getenv("GROQ_API_KEY")
     )
-    
-    # Now wrap it with ChatHuggingFace (this is the required pattern)
-    llm = ChatHuggingFace(llm=base_llm)
     
     # Step 5: Assemble the full chain.
     # The user query goes to the prompt, then to the LLM, and the LLM's output is passed to the parser.
