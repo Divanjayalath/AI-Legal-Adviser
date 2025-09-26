@@ -28,10 +28,10 @@ def main():
         return create_master_agent()
 
     # --- Chat Interface ---
-    if "messages" not in st.session_state:
+    if "messages" not in st.session_state: # Initialize chat history if it doesn't exist
         st.session_state.messages = []
 
-    # Display chat history
+    # Display chat history ( in the chat interface)
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])

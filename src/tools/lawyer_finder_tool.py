@@ -53,7 +53,7 @@ def find_lawyer(query: str) -> str:
     except Exception as e:
         print(f"Query parsing error: {e}, using defaults")
     
-    print(f"--- 🌐 Executing Live Lawyer Search for: '{specialty}' in '{location}' ---")
+    print(f"--- Executing Live Lawyer Search for: '{specialty}' in '{location}' ---")
 
     try:
         # Step 1: Format the specialty into the URL format used by PathLegal
@@ -112,9 +112,18 @@ def find_lawyer(query: str) -> str:
                 current_url = None
 
         if not all_results:
-            return f"No lawyers were found for '{specialty}' in '{location}' after searching the directory."
+            return f"No lawyers were found for '{specialty}' in '{location}' after searching the directory. Search completed."
         
-        return "Found the following lawyers from a live web search:\n" + "\n".join(all_results)
+        # Limit results to prevent overwhelming the agent
+        limited_results = all_results[:5]  # Show only first 5 results
+        result_text = "Found the following lawyers from a live web search:\n" + "\n".join(limited_results)
+        
+        if len(all_results) > 5:
+            result_text += f"\n\n(Showing 5 of {len(all_results)} total results. Search completed successfully.)"
+        else:
+            result_text += "\n\nSearch completed successfully."
+            
+        return result_text
 
     except requests.exceptions.RequestException as e:
         return f"Error: Could not connect to the lawyer directory website. Details: {e}"
